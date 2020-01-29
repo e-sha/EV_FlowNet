@@ -1,6 +1,5 @@
-dvsutils
 imageio
 numpy
-skimage
+scikit-image
 torch
 tqdm
