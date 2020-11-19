@@ -100,7 +100,7 @@ def compute_event_image(events, start, stop, imsize):
     stop_ts = t[shift[b]]
 
     # normalize timestamps and polarities
-    t = (t - start_ts) / (stop_ts - start_ts)
+    t = (t - start_ts) / np.maximum((stop_ts - start_ts), 1e-9)
     p = (1 - p) // 2 # (-1, 1) -> (1, 0)
 
     shape = tuple([bs, 4] + list(imsize))
