@@ -75,6 +75,10 @@ def compute_event_image(events, start, stop, imsize):
     ''' computes event image. Unfortunately on CPU, because of absense of torch.index_max_ function
     '''
     bs = len(start)
+    if isinstance(events, torch.Tensor):
+        events = events.detach().cpu().numpy()
+        start = start.detach().cpu().numpy()
+        stop = stop.detach().cpu().numpy()
 
     x = events[:, 0].astype(int)
     y = events[:, 1].astype(int)
@@ -153,7 +157,7 @@ class Model(nn.Module):
     def _extend_size(self, imsize):
         return tuple(map(lambda x: ((x - 1) // 16 + 1) * 16, imsize))
 
-    def forward(self, events, start, stop, imsize, raw=True):
+    def forward(self, events, start, stop, imsize, raw=True, intermediate=False):
 
         # compute extended image size
         outsize = [tuple(map(lambda x: x//2**i, imsize))
@@ -168,20 +172,39 @@ class Model(nn.Module):
 
         y = []
         skip = [xb]
+        if intermediate:
+            intermediate_output = {'input': xb}
         # encoder
         for enc_block in self.enc:
             skip.append(enc_block(skip[-1]))
+            if intermediate:
+                intermediate_output[f'enc_{len(skip)-2}'] = skip[-1]
         # transition
         h = skip[-1]
-        for res in self.tr:
+        for idx, res in enumerate(self.tr):
             h = res(h)
+            if intermediate:
+                intermediate_output[f'tr_{idx}'] = h
         # decoder
         n = len(skip)
-        for s, d, f in zip(skip[n:0:-1], self.dec, self.flow):
+        for idx, (s, d, f) in enumerate(zip(skip[n:0:-1], self.dec, self.flow)):
             h = torch.cat((h, s), 1)
+            if intermediate:
+                intermediate_output[f'dec_cat_{idx}'] = h
             h = d(h)
-            y.append(torch.tanh(f(h)) * 256.)
+            if intermediate:
+                intermediate_output[f'dec_op_{idx}'] = h
+            h_flow = f(h)
+            if intermediate:
+                intermediate_output[f'dec_flow_arth_{idx}'] = h_flow
+                y.append(torch.tanh(h_flow).clone()) # clone is required for backward pass
+            else:
+                y.append(torch.tanh_(h_flow))
+            y[-1].mul_(256.)
             h = torch.cat((h, y[-1]), 1)
 
         # shrink image to original size
-        return self._get_result(y, outsize)
+        result = self._get_result(y, outsize)
+        if intermediate:
+            return result, intermediate_output
+        return result
