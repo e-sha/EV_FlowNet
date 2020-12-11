@@ -175,12 +175,13 @@ class Model(nn.Module):
         # compute event_image
         if raw:
             extended_size = self._extend_size(imsize)
-            xb = compute_event_image(events,
-                                     start,
-                                     stop,
-                                     extended_size,
-                                     device=self.device,
-                                     dtype=torch.float32)
+            with torch.no_grad:
+                xb = compute_event_image(events,
+                                         start,
+                                         stop,
+                                         extended_size,
+                                         device=self.device,
+                                         dtype=torch.float32)
         else:
             xb = events
 
