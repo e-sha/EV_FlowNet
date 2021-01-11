@@ -24,14 +24,13 @@ class OpticalFlow:
     '''
     def __init__(self, imsize,
             model=osp.join(script_dir, 'data/model/model.pth'),
-            cuda=True):
+            device=torch.device('cuda:0')):
 
-        if cuda:
-            self._device = torch.device('cuda:0')
-            self._back = lambda x: x.cpu().detach().numpy()
-        else:
-            self._device = torch.device('cpu')
+        self._device = device
+        if self._device.type == 'cpu':
             self._back = lambda x: x.detach().numpy()
+        else:
+            self._back = lambda x: x.cpu().detach().numpy()
         self._net = Model(device=self._device)
         self._net.load_state_dict(torch.load(model, map_location=self._device))
         self._net.to(device=self._device)
@@ -54,8 +53,9 @@ class OpticalFlow:
         -------
             of (np.ndarray): The computed optical flow as 3D tensor with depth 2.
         '''
-        flow = self._net(*self._preprocess(events, start, stop), self.imsize)
-        return self._postprocess(flow, return_all)
+        with torch.no_grad():
+            flow = self._net(*self._preprocess(events, start, stop), self.imsize)
+            return self._postprocess(flow, return_all)
 
     def _collate(self, events, start, stop):
         ''' converts tuple of events for each sample to a single Tensor with sample index
