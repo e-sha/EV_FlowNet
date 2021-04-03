@@ -1,4 +1,4 @@
-from .net import Model
+from .net import EV_FlowNet, EV_OFlowNet
 import torch
 import numpy as np
 from functools import partial
@@ -24,14 +24,19 @@ class OpticalFlow:
     '''
     def __init__(self, imsize,
             model=osp.join(script_dir, 'data/model/model.pth'),
-            device=torch.device('cuda:0')):
+            device=torch.device('cuda:0'),
+            use_oflow=False):
 
         self._device = device
         if self._device.type == 'cpu':
             self._back = lambda x: x.detach().numpy()
         else:
             self._back = lambda x: x.cpu().detach().numpy()
-        self._net = Model(device=self._device)
+
+        if use_oflow:
+            self._net = EV_OFlowNet(device=self._device)
+        else:
+            self._net = EV_FlowNet(device=self._device)
         self._net.load_state_dict(torch.load(model, map_location=self._device))
         self._net.to(device=self._device)
         self._net.eval()
@@ -54,7 +59,7 @@ class OpticalFlow:
             of (np.ndarray): The computed optical flow as 3D tensor with depth 2.
         '''
         with torch.no_grad():
-            flow = self._net(*self._preprocess(events, start, stop), self.imsize)
+            flow = self._net(self._preprocess(events, start, stop), self.imsize)
             return self._postprocess(flow, return_all)
 
     def _collate(self, events, start, stop):

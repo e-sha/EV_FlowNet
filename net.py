@@ -1,133 +1,17 @@
 import torch
 from torch import nn
-import torch.nn.functional as F
-try:
-    from torch_scatter import scatter_max, scatter_sum
-except:
-    scatter_max = None
-    scatter_sum = None
 
 import numpy as np
 
+from .helpers import normalize_timestamps, compute_event_image
+from .layers import GConv2d, GConv2d_right, ResNetBlock, UpsampleBlock, QuantizationLayer, InverseGradientLayer
+
 _BASE_CHANNELS = 64
 
-def init_conv(conv):
-    torch.nn.init.kaiming_normal_(conv.weight, a=4.4, nonlinearity='relu')
-    torch.nn.init.constant_(conv.bias, 0)
 
-def init_bn(bn):
-    torch.nn.init.constant_(bn.weight, 0.1)
-
-class GConv2d(nn.Module):
-    def __init__(self, in_size, out_size, kernel_size, padding=True):
-        super(GConv2d, self).__init__()
-
-        padding = tuple(map(lambda x:
-            (x-1) // 2, kernel_size)) if padding else 0
-        self.conv = nn.Conv2d(in_size, out_size,
-                kernel_size=kernel_size, padding=padding)
-        self.bn = nn.BatchNorm2d(out_size)
-        init_conv(self.conv)
-        init_bn(self.bn)
-
-    def forward(self, x):
-        return self.bn(F.relu(self.conv(x)))
-
-class GConv2d_right(nn.Module):
-    def __init__(self, in_size, out_size, kernel_size, stride):
-        super(GConv2d_right, self).__init__()
-
-        self.padding = tuple(map(lambda x: x-1, kernel_size))
-        self.padding = [0, self.padding[0], 0, self.padding[1]]
-        self.conv = nn.Conv2d(in_size, out_size,
-                kernel_size=kernel_size, stride=stride)
-        self.bn = nn.BatchNorm2d(out_size)
-        init_conv(self.conv)
-        init_bn(self.bn)
-
-    def forward(self, x):
-        return self.bn(F.relu(self.conv(F.pad(x, self.padding))))
-
-class ResNetBlock(nn.Module):
-    def __init__(self, io_size, kernel_size, depth):
-        super(ResNetBlock, self).__init__()
-
-        self.conv = nn.ModuleList()
-        for _ in range(depth):
-            self.conv.append(GConv2d(io_size, io_size, kernel_size))
-
-    def forward(self, x):
-        h = x.clone()
-        for conv in self.conv:
-            h = conv(h)
-        return x + h
-
-class UpsampleBlock(nn.Module):
-    def __init__(self, in_size, out_size, kernel_size):
-        super(UpsampleBlock, self).__init__()
-
-        self.pad_size = tuple(map(lambda x: (x - 1) // 2,
-                [x for sub in zip(kernel_size, kernel_size)
-                    for x in sub]))
-        self.conv = GConv2d(in_size, out_size, kernel_size, padding=False)
-
-    def forward(self, x):
-        x = F.pad(F.interpolate(x, scale_factor=2), self.pad_size,
-                mode='reflect')
-        return self.conv(x)
-
-def compute_event_image(events, start, stop, imsize, device='cpu', dtype=torch.float32):
-    ''' computes event image
-    '''
-    assert scatter_max is not None, f'follow https://github.com/rusty1s/pytorch_scatter#installation to install torch_scatter'
-    bs = len(start)
-    if not isinstance(events, torch.Tensor):
-        events = torch.tensor(events, device=device)
-        start = torch.tensor(start, device=device, dtype=dtype)
-
-    assert len(imsize) == 2
-
-    shape = tuple([bs, 4] + list(imsize))
-    res = torch.zeros(shape, dtype=dtype, device=device)
-    if events.numel() == 0:
-        return res
-
-    x = events[:, 0].long()
-    y = events[:, 1].long()
-    t = events[:, 2]
-    p = events[:, 3].long()
-    b = events[:, 4].long()
-
-    assert (torch.abs(p) == 1).all(), f'{torch.unique(p)}'
-
-    # index of the last event for each timestamp
-    uniq_b, num_events = torch.unique(b, return_counts=True)
-    shift = torch.zeros(bs, dtype=torch.long, device=device)
-    shift[uniq_b] = torch.cumsum(num_events, dim=0) - 1
-
-    tmp = shift[uniq_b]
-    assert (b[tmp] == uniq_b).all()
-    assert (b[tmp[:-1]+1] > uniq_b[:-1]).all()
-    assert tmp[-1] + 1 == b.numel()
-
-    dt = torch.zeros(bs, dtype=dtype, device=device)
-    dt[uniq_b] = t[shift[uniq_b]] - start[uniq_b]
-    dt.clamp_(min=1e-9)
-
-    # normalize timestamps and polarities
-    t = (t - start[b]) / dt[b]
-    p = (1 - p) // 2 # (-1, 1) -> (1, 0)
-
-    idx = ((b * shape[1] + p) * shape[2] + y) * shape[3] + x
-
-    res = res.view(-1)
-    scatter_sum(torch.ones(idx.numel(), device=device, dtype=dtype), idx, out=res)
-    scatter_max(t, idx + 2 * imsize[0] * imsize[1], out=res)
-    return res.view(*shape)
-
-class Model(nn.Module):
-    def __init__(self, device):
-        super(Model, self).__init__()
+class EV_FlowNet(nn.Module):
+    def __init__(self, device, input_size=4, activation=nn.ReLU()):
+        super(EV_FlowNet, self).__init__()
         self.device = device
         in_size = 4
         enc_depth = 4
@@ -135,30 +19,28 @@ class Model(nn.Module):
         tr_res_depth = 2
         kernel_size = (3, 3)
         # encoder
-        sizes = [4]
-        self.enc = nn.ModuleList()
+        sizes = [input_size]
+        self.encoder_blocks = nn.ModuleList()
         for i in range(enc_depth):
             sizes.append(_BASE_CHANNELS * 2**i)
-            self.enc.append(GConv2d_right(sizes[-2], sizes[-1],
-                kernel_size, 2))
+            self.encoder_blocks.append(GConv2d_right(sizes[-2], sizes[-1], kernel_size, 2))
         # transition
-        self.tr = nn.ModuleList()
+        self.transition_blocks = nn.ModuleList()
         for i in range(tr_depth):
-            self.tr.append(ResNetBlock(sizes[-1],
-                kernel_size=kernel_size, depth=tr_res_depth))
+            block = ResNetBlock(sizes[-1], kernel_size=kernel_size, depth=tr_res_depth, activation=activation)
+            self.transition_blocks.append(block)
+
         # decoder
-        self.dec = nn.ModuleList()
-        self.flow = nn.ModuleList()
+        self.decoder_blocks = nn.ModuleList()
+        self.flow_output_blocks = nn.ModuleList()
         sizes[0] = 32
         for i in range(enc_depth):
             in_size = 2 * sizes[-1-i] + (2 if i>0 else 0)
             out_size = sizes[-2-i]
-            self.dec.append(UpsampleBlock(in_size,
-                out_size, kernel_size))
-            self.flow.append(nn.Conv2d(out_size, 2,
-                kernel_size=(1,1)))
-            init_conv(self.flow[-1])
-
+            upsample_block = UpsampleBlock(in_size, out_size, kernel_size=kernel_size, activation=activation)
+            self.decoder_blocks.append(upsample_block)
+            conv_block = GConv2d(out_size, 2, kernel_size=(1,1), activation=activation, use_bn=False)
+            self.flow_output_blocks.append(conv_block)
 
     def _get_result(self, flow, outsize):
         return tuple(f[..., :s[0], :s[1]] for f, s in zip(flow, outsize))
@@ -166,60 +48,150 @@ class Model(nn.Module):
     def _extend_size(self, imsize):
         return tuple(map(lambda x: ((x - 1) // 16 + 1) * 16, imsize))
 
-    def forward(self, events, start, stop, imsize, raw=True, intermediate=False):
+    def encode(self, layer_inputs, intermediate_output):
+        for enc_block in self.encoder_blocks:
+            prev_input = layer_inputs[-1]
+            encoded_input = enc_block(prev_input)
+            if intermediate_output:
+                intermediate_output[f'enc_{len(layer_inputs)-1}'] = encoded_input
+            layer_inputs.append(encoded_input)
 
-        # compute extended image size
-        outsize = [tuple(map(lambda x: x//2**i, imsize))
-                for i in range(len(self.enc))][::-1]
+    def transit(self, encoded_input, intermediate_output):
+         # transition
+        hidden_state = encoded_input
+        for idx, transition_block in enumerate(self.transition_blocks):
+            hidden_state = transition_block(hidden_state)
+            if intermediate_output:
+                intermediate_output[f'tr_{idx}'] = hidden_state
+        return hidden_state
 
+    def decode(self, hidden_state, layer_inputs, intermediate_output):
+        outputs = []
+        layer_inputs = reversed(layer_inputs[1:])
+        for idx, (layer_input, decoder_block, flow_out_block) in enumerate(zip(layer_inputs, self.decoder_blocks, self.flow_output_blocks)):
+
+            hidden_state = torch.cat((hidden_state, layer_input), 1)
+            if intermediate_output:
+                intermediate_output[f'dec_cat_{idx}'] = hidden_state
+            hidden_state = decoder_block(hidden_state)
+            if intermediate_output:
+                intermediate_output[f'dec_op_{idx}'] = hidden_state
+            internal_flow = flow_out_block(hidden_state)
+            if intermediate_output:
+                intermediate_output[f'dec_flow_arth_{idx}'] = internal_flow
+                current_out = torch.tanh(internal_flow).clone() # clone is required for backward pass
+            else:
+                current_out = torch.tanh_(internal_flow)
+
+            current_out = current_out.mul_(256.)
+            hidden_state = torch.cat((hidden_state, current_out), 1)
+            outputs.append(current_out)
+        return outputs
+
+
+    def compute_outsizes(self, imsize):
+        blocks_count = len(self.encoder_blocks)
+        denominators = 2 ** np.arange(blocks_count - 1, -1, -1)
+        imsizes_x = np.tile(imsize[0], blocks_count) // denominators
+        imsizes_y = np.tile(imsize[1], blocks_count) // denominators
+        outsizes = zip(imsizes_x, imsizes_y)
+        return outsizes
+
+    def forward(self, network_input, imsize, intermediate=False, domain_descriminator=None):
         # compute event_image
-        if raw:
+        if type(network_input) ==  tuple:
+            events, start, stop = network_input
             extended_size = self._extend_size(imsize)
             with torch.no_grad():
-                xb = compute_event_image(events,
+                network_input = compute_event_image(events,
                                          start,
                                          stop,
                                          extended_size,
                                          device=self.device,
                                          dtype=torch.float32)
-        else:
-            xb = events
 
-        y = []
-        skip = [xb]
         if intermediate:
-            intermediate_output = {'input': xb}
-        # encoder
-        for enc_block in self.enc:
-            skip.append(enc_block(skip[-1]))
-            if intermediate:
-                intermediate_output[f'enc_{len(skip)-2}'] = skip[-1]
-        # transition
-        h = skip[-1]
-        for idx, res in enumerate(self.tr):
-            h = res(h)
-            if intermediate:
-                intermediate_output[f'tr_{idx}'] = h
-        # decoder
-        n = len(skip)
-        for idx, (s, d, f) in enumerate(zip(skip[n:0:-1], self.dec, self.flow)):
-            h = torch.cat((h, s), 1)
-            if intermediate:
-                intermediate_output[f'dec_cat_{idx}'] = h
-            h = d(h)
-            if intermediate:
-                intermediate_output[f'dec_op_{idx}'] = h
-            h_flow = f(h)
-            if intermediate:
-                intermediate_output[f'dec_flow_arth_{idx}'] = h_flow
-                y.append(torch.tanh(h_flow).clone()) # clone is required for backward pass
-            else:
-                y.append(torch.tanh_(h_flow))
-            y[-1].mul_(256.)
-            h = torch.cat((h, y[-1]), 1)
+            intermediate_output = {'input': network_input}
+        else:
+            intermediate_output = None
+
+        layer_inputs = [network_input]
+        self.encode(layer_inputs, intermediate_output)
+        hidden_state = self.transit(layer_inputs[-1], intermediate_output)
+        outputs =self.decode(hidden_state, layer_inputs, intermediate_output)
 
         # shrink image to original size
-        result = self._get_result(y, outsize)
+        outsizes = self.compute_outsizes(imsize)
+        results = [self._get_result(outputs, outsizes)]
+
         if intermediate:
-            return result, intermediate_output
-        return result
+            results.append(intermediate_output)
+
+        if domain_descriminator:
+            results.append(domain_descriminator(hidden_state))
+
+        return results[0] if len(results) == 1 else results
+
+
+class EV_OFlowNet(nn.Module):
+    def __init__(self,
+                 device,
+                 voxel_dimension=9,
+                 mlp_layers=[1, 30, 30, 1],
+                 quantization_activation=nn.LeakyReLU(negative_slope=0.1),
+                 predictor_activation=nn.ReLU()):
+        super(EV_OFlowNet, self).__init__()
+        self.device = device
+        # events representation
+        self.quantization_layer = QuantizationLayer(voxel_dimension,
+                                                    mlp_layers,
+                                                    quantization_activation)
+        self.predictor = EV_FlowNet(device=self.device,
+                                   input_size=voxel_dimension * 2,
+                                   activation=predictor_activation)
+
+    def forward(self,
+                events,
+                start,
+                stop,
+                imsize,
+                intermediate=False,
+                domain_descriminator=False):
+
+        events = normalize_timestamps(events, start, stop)
+        batch_size = start.numel()
+        xb = self.quantization_layer(events, imsize, batch_size)
+        return self.predictor(xb, imsize, intermediate=intermediate, domain_descriminator=domain_descriminator)
+
+    def get_output_sizes(self, imshape):
+        return self.predictor.get_output_sizes(imshape)
+
+
+
+class ModelWithDomainAdoption(nn.Module):
+    def __init__(self, device, use_oflow=True):
+        super(ModelWithDomainAdoption, self).__init__()
+
+        if use_oflow:
+            self.predictor = EV_OFlowNet(device=device)
+        else:
+            self.predictor = EV_FlowNet(device=device)
+
+        self.domain_descriminator = nn.Sequential(
+            InverseGradientLayer(),
+            nn.Flatten(),
+            nn.Linear(512 * 16 * 16, 128),
+            # nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(128, 1)
+        )
+
+    def descriminate(self, state):
+        return self.domain_descriminator(state)
+
+    def forward(self, events, start, stop, imsize, intermediate=False, descriminate_domain=False):
+        if descriminate_domain:
+            return self.predictor.forward(events, start, stop, imsize, intermediate, self.domain_descriminator)
+        else:
+            return self.predictor.forward(events, start, stop, imsize, intermediate, False)
