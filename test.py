@@ -1,11 +1,12 @@
 from pathlib import Path
-import imageio
 from imageio import imwrite
 from skimage.color import hsv2rgb
 import numpy as np
 from tqdm import tqdm
 
 import sys
+
+
 cur_path = Path(__file__).parent.resolve()
 module_name = cur_path.name
 sys.path.append(str(cur_path.parent))
@@ -24,12 +25,13 @@ imsize = 480, 640
 # window size in microseconds
 dt = 1. / fps
 
+
 def vis_flow(flow):
     mag = np.linalg.norm(flow, axis=2)
     a_mag = np.min(mag)
     b_mag = np.max(mag)
 
-    ang = np.arctan2(flow[...,0], flow[...,1])
+    ang = np.arctan2(flow[..., 0], flow[..., 1])
     ang += np.pi
     ang *= 180. / np.pi / 2.
     ang = ang.astype(np.uint8)
@@ -37,9 +39,11 @@ def vis_flow(flow):
     hsv[:, :, 0] = ang
     hsv[:, :, 1] = 255
     hsv[:, :, 2] = np.clip(mag, 0, 255)
-    hsv[:, :, 2] = ((mag - a_mag).astype(np.float32) * (255. / (b_mag - a_mag + 1e-32))).astype(np.uint8)
+    hsv[:, :, 2] = ((mag - a_mag).astype(np.float32) *
+                    (255. / (b_mag - a_mag + 1e-32))).astype(np.uint8)
     flow_rgb = hsv2rgb(hsv)
     return 255 - (flow_rgb * 255).astype(np.uint8)
+
 
 def vis_events(events, imsize):
     res = np.zeros(imsize, dtype=np.uint8).ravel()
@@ -47,6 +51,7 @@ def vis_events(events, imsize):
     i = np.ravel_multi_index([y, x], imsize)
     np.maximum.at(res, i, np.full_like(x, 255, dtype=np.uint8))
     return np.tile(res.reshape(imsize)[..., None], (1, 1, 3))
+
 
 def collage(flow_rgb, events_rgb):
     flow_rgb = flow_rgb[::-1]
@@ -59,13 +64,14 @@ def collage(flow_rgb, events_rgb):
     res[:orig_h, :orig_w] = flow_rgb[0]
     res[:orig_h, orig_w:] = events_rgb
 
-    k = 0
+    left = 0
     for img in flow_rgb[1:]:
         h, w = img.shape[:2]
-        l = k + w
-        res[orig_h:orig_h+h, k:l] = img
-        k = l
+        right = left + w
+        res[orig_h:orig_h+h, left:right] = img
+        left = right
     return res
+
 
 of = OpticalFlow(imsize)
 
@@ -78,7 +84,9 @@ frame_ts = np.append(frame_ts, [frame_ts[-1] + dt])
 num_frames = len(frame_ts) - 1
 
 idx_array = np.searchsorted(t, frame_ts)
-for i, (b, e) in tqdm(enumerate(zip(idx_array[:-1], idx_array[1:])), total = num_frames):
+for i, (b, e) in tqdm(enumerate(zip(idx_array[:-1],
+                                    idx_array[1:])),
+                      total=num_frames):
     # events of the current sliding window
     frame_events = [x[b:e] for x in events]
     # predicted optical flow. Batch size is equal to 1

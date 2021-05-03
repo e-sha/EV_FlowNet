@@ -3,29 +3,32 @@ from torch import nn
 import torch.nn.functional as F
 try:
     from torch_scatter import scatter_max, scatter_sum
-except:
+except ImportError:
     scatter_max = None
     scatter_sum = None
 
-import numpy as np
-
 _BASE_CHANNELS = 64
+
 
 def init_conv(conv):
     torch.nn.init.kaiming_normal_(conv.weight, a=4.4, nonlinearity='relu')
     torch.nn.init.constant_(conv.bias, 0)
 
+
 def init_bn(bn):
     torch.nn.init.constant_(bn.weight, 0.1)
+
 
 class GConv2d(nn.Module):
     def __init__(self, in_size, out_size, kernel_size, padding=True):
         super(GConv2d, self).__init__()
 
-        padding = tuple(map(lambda x:
-            (x-1) // 2, kernel_size)) if padding else 0
-        self.conv = nn.Conv2d(in_size, out_size,
-                kernel_size=kernel_size, padding=padding)
+        padding = tuple(map(lambda x: (x - 1) // 2, kernel_size)) \
+            if padding else 0
+        self.conv = nn.Conv2d(in_size,
+                              out_size,
+                              kernel_size=kernel_size,
+                              padding=padding)
         self.bn = nn.BatchNorm2d(out_size)
         init_conv(self.conv)
         init_bn(self.bn)
@@ -33,20 +36,24 @@ class GConv2d(nn.Module):
     def forward(self, x):
         return self.bn(F.relu(self.conv(x)))
 
+
 class GConv2d_right(nn.Module):
     def __init__(self, in_size, out_size, kernel_size, stride):
         super(GConv2d_right, self).__init__()
 
         self.padding = tuple(map(lambda x: x-1, kernel_size))
         self.padding = [0, self.padding[0], 0, self.padding[1]]
-        self.conv = nn.Conv2d(in_size, out_size,
-                kernel_size=kernel_size, stride=stride)
+        self.conv = nn.Conv2d(in_size,
+                              out_size,
+                              kernel_size=kernel_size,
+                              stride=stride)
         self.bn = nn.BatchNorm2d(out_size)
         init_conv(self.conv)
         init_bn(self.bn)
 
     def forward(self, x):
         return self.bn(F.relu(self.conv(F.pad(x, self.padding))))
+
 
 class ResNetBlock(nn.Module):
     def __init__(self, io_size, kernel_size, depth):
@@ -62,24 +69,33 @@ class ResNetBlock(nn.Module):
             h = conv(h)
         return x + h
 
+
 class UpsampleBlock(nn.Module):
     def __init__(self, in_size, out_size, kernel_size):
         super(UpsampleBlock, self).__init__()
 
         self.pad_size = tuple(map(lambda x: (x - 1) // 2,
-                [x for sub in zip(kernel_size, kernel_size)
-                    for x in sub]))
+                                  [x for sub in zip(kernel_size, kernel_size)
+                                   for x in sub]))
         self.conv = GConv2d(in_size, out_size, kernel_size, padding=False)
 
     def forward(self, x):
         x = F.pad(F.interpolate(x, scale_factor=2), self.pad_size,
-                mode='reflect')
+                  mode='reflect')
         return self.conv(x)
 
-def compute_event_image(events, start, stop, imsize, device='cpu', dtype=torch.float32):
+
+def compute_event_image(events,
+                        start,
+                        stop,
+                        imsize,
+                        device='cpu',
+                        dtype=torch.float32):
     ''' computes event image
     '''
-    assert scatter_max is not None, f'follow https://github.com/rusty1s/pytorch_scatter#installation to install torch_scatter'
+    assert scatter_max is not None, 'follow https://github.com/rusty1s' \
+                                    '/pytorch_scatter#installation to ' \
+                                    'install torch_scatter'
     bs = len(start)
     if not isinstance(events, torch.Tensor):
         events = torch.tensor(events, device=device)
@@ -116,14 +132,16 @@ def compute_event_image(events, start, stop, imsize, device='cpu', dtype=torch.f
 
     # normalize timestamps and polarities
     t = (t - start[b]) / dt[b]
-    p = (1 - p) // 2 # (-1, 1) -> (1, 0)
+    p = (1 - p) // 2  # (-1, 1) -> (1, 0)
 
     idx = ((b * shape[1] + p) * shape[2] + y) * shape[3] + x
 
     res = res.view(-1)
-    scatter_sum(torch.ones(idx.numel(), device=device, dtype=dtype), idx, out=res)
+    scatter_sum(torch.ones(idx.numel(), device=device, dtype=dtype),
+                idx, out=res)
     scatter_max(t, idx + 2 * imsize[0] * imsize[1], out=res)
     return res.view(*shape)
+
 
 class Model(nn.Module):
     def __init__(self, device):
@@ -139,26 +157,29 @@ class Model(nn.Module):
         self.enc = nn.ModuleList()
         for i in range(enc_depth):
             sizes.append(_BASE_CHANNELS * 2**i)
-            self.enc.append(GConv2d_right(sizes[-2], sizes[-1],
-                kernel_size, 2))
+            self.enc.append(GConv2d_right(sizes[-2],
+                                          sizes[-1],
+                                          kernel_size,
+                                          2))
         # transition
         self.tr = nn.ModuleList()
         for i in range(tr_depth):
             self.tr.append(ResNetBlock(sizes[-1],
-                kernel_size=kernel_size, depth=tr_res_depth))
+                           kernel_size=kernel_size,
+                           depth=tr_res_depth))
         # decoder
         self.dec = nn.ModuleList()
         self.flow = nn.ModuleList()
         sizes[0] = 32
         for i in range(enc_depth):
-            in_size = 2 * sizes[-1-i] + (2 if i>0 else 0)
+            in_size = 2 * sizes[-1 - i] + (2 if i > 0 else 0)
             out_size = sizes[-2-i]
             self.dec.append(UpsampleBlock(in_size,
-                out_size, kernel_size))
+                                          out_size,
+                                          kernel_size))
             self.flow.append(nn.Conv2d(out_size, 2,
-                kernel_size=(1,1)))
+                                       kernel_size=(1, 1)))
             init_conv(self.flow[-1])
-
 
     def _get_result(self, flow, outsize):
         return tuple(f[..., :s[0], :s[1]] for f, s in zip(flow, outsize))
@@ -166,11 +187,17 @@ class Model(nn.Module):
     def _extend_size(self, imsize):
         return tuple(map(lambda x: ((x - 1) // 16 + 1) * 16, imsize))
 
-    def forward(self, events, start, stop, imsize, raw=True, intermediate=False):
+    def forward(self,
+                events,
+                start,
+                stop,
+                imsize,
+                raw=True,
+                intermediate=False):
 
         # compute extended image size
         outsize = [tuple(map(lambda x: x//2**i, imsize))
-                for i in range(len(self.enc))][::-1]
+                   for i in range(len(self.enc))][::-1]
 
         # compute event_image
         if raw:
@@ -202,7 +229,9 @@ class Model(nn.Module):
                 intermediate_output[f'tr_{idx}'] = h
         # decoder
         n = len(skip)
-        for idx, (s, d, f) in enumerate(zip(skip[n:0:-1], self.dec, self.flow)):
+        for idx, (s, d, f) in enumerate(zip(skip[n:0:-1],
+                                            self.dec,
+                                            self.flow)):
             h = torch.cat((h, s), 1)
             if intermediate:
                 intermediate_output[f'dec_cat_{idx}'] = h
@@ -212,7 +241,8 @@ class Model(nn.Module):
             h_flow = f(h)
             if intermediate:
                 intermediate_output[f'dec_flow_arth_{idx}'] = h_flow
-                y.append(torch.tanh(h_flow).clone()) # clone is required for backward pass
+                # clone is required for backward pass
+                y.append(torch.tanh(h_flow).clone())
             else:
                 y.append(torch.tanh_(h_flow))
             y[-1].mul_(256.)
