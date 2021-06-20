@@ -71,12 +71,13 @@ class OpticalFlow:
         events = np.hstack([
             np.vstack((
                 e,
-                np.full_like(e[0], i, dtype=np.float32)))
+                np.full_like(e[0], 0),
+                np.full_like(e[0], i)))
             for i, e in enumerate(events)
             ])
-        start = np.hstack(start)
-        stop = np.hstack(stop)
-        return (events.T, start, stop)
+        timestamps = np.vstack(([[b, i], [e, i]]
+                                for i, (b, e) in enumerate(zip(start, stop))))
+        return events.T, timestamps
 
     def _preprocess(self, events, start, stop):
         return self._collate(events, start, stop)

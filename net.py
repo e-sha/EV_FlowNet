@@ -86,8 +86,7 @@ class UpsampleBlock(nn.Module):
 
 
 def compute_event_image(events,
-                        start,
-                        stop,
+                        timestamps,
                         imsize,
                         device='cpu',
                         dtype=torch.float32):
@@ -96,6 +95,10 @@ def compute_event_image(events,
     assert scatter_max is not None, 'follow https://github.com/rusty1s' \
                                     '/pytorch_scatter#installation to ' \
                                     'install torch_scatter'
+    assert timestamps.shape[1] == 2
+    assert (timestamps[-1, -1] + 1) * 2 == timestamps.shape[0]
+    start = timestamps[::2, 0]
+    stop = timestamps[1::2, 0]
     bs = len(start)
     if not isinstance(events, torch.Tensor):
         events = torch.tensor(events, device=device)
@@ -108,11 +111,14 @@ def compute_event_image(events,
     if events.numel() == 0:
         return res
 
+    assert events.shape[1] == 6
+
     x = events[:, 0].long()
     y = events[:, 1].long()
     t = events[:, 2]
     p = events[:, 3].long()
-    b = events[:, 4].long()
+    s = events[:, 4].long()
+    b = events[:, 5].long()
 
     assert (torch.abs(p) == 1).all(), f'{torch.unique(p)}'
 
@@ -189,8 +195,7 @@ class Model(nn.Module):
 
     def forward(self,
                 events,
-                start,
-                stop,
+                timestamps,
                 imsize,
                 raw=True,
                 intermediate=False):
@@ -204,8 +209,7 @@ class Model(nn.Module):
             extended_size = self._extend_size(imsize)
             with torch.no_grad():
                 xb = compute_event_image(events,
-                                         start,
-                                         stop,
+                                         timestamps,
                                          extended_size,
                                          device=self.device,
                                          dtype=torch.float32)
