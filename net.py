@@ -101,8 +101,9 @@ def compute_event_image(events,
     stop = timestamps[1::2, 0]
     bs = len(start)
     if not isinstance(events, torch.Tensor):
-        events = torch.tensor(events, device=device)
-        start = torch.tensor(start, device=device, dtype=dtype)
+        events = torch.tensor(events, dtype=dtype, device=device)
+        start = torch.tensor(start, dtype=dtype, device=device)
+        stop = torch.tensor(stop, dtype=dtype, device=device)
 
     assert len(imsize) == 2
 
@@ -111,7 +112,7 @@ def compute_event_image(events,
     if events.numel() == 0:
         return res
 
-    assert events.shape[1] == 6
+    assert events.shape[1] == 6, events.shape
 
     x = events[:, 0].long()
     y = events[:, 1].long()

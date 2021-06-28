@@ -29,7 +29,7 @@ class OpticalFlow:
                  model=osp.join(script_dir, 'data/model/model.pth'),
                  device=torch.device('cuda:0')):
 
-        self._device = device
+        self._device = torch.device(device)
         if self._device.type == 'cpu':
             self._back = lambda x: x.detach().numpy()
         else:
@@ -75,8 +75,8 @@ class OpticalFlow:
                 np.full_like(e[0], i)))
             for i, e in enumerate(events)
             ])
-        timestamps = np.vstack(([[b, i], [e, i]]
-                                for i, (b, e) in enumerate(zip(start, stop))))
+        timestamps = np.vstack(tuple([[b, i], [e, i]]
+            for i, (b, e) in enumerate(zip(start, stop))))
         return events.T, timestamps
 
     def _preprocess(self, events, start, stop):
