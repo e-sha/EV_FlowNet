@@ -87,6 +87,7 @@ class UpsampleBlock(nn.Module):
 
 def compute_event_image(events,
                         timestamps,
+                        batch_idx,
                         imsize,
                         device='cpu',
                         dtype=torch.float32):
@@ -95,10 +96,11 @@ def compute_event_image(events,
     assert scatter_max is not None, 'follow https://github.com/rusty1s' \
                                     '/pytorch_scatter#installation to ' \
                                     'install torch_scatter'
-    assert timestamps.shape[1] == 2
-    assert (timestamps[-1, -1] + 1) * 2 == timestamps.shape[0]
-    start = timestamps[::2, 0]
-    stop = timestamps[1::2, 0]
+    assert timestamps.ndim == 1
+    assert batch_idx.ndim == 1
+    assert (batch_idx[-1] + 1) * 2 == timestamps.numel()
+    start = timestamps[::2]
+    stop = timestamps[1::2]
     bs = len(start)
     if not isinstance(events, torch.Tensor):
         events = torch.tensor(events, dtype=dtype, device=device)
@@ -197,6 +199,7 @@ class Model(nn.Module):
     def forward(self,
                 events,
                 timestamps,
+                batch_idx,
                 imsize,
                 raw=True,
                 intermediate=False):
@@ -211,6 +214,7 @@ class Model(nn.Module):
             with torch.no_grad():
                 xb = compute_event_image(events,
                                          timestamps,
+                                         batch_idx,
                                          extended_size,
                                          device=self.device,
                                          dtype=torch.float32)
@@ -255,6 +259,5 @@ class Model(nn.Module):
 
         # shrink image to original size
         result = self._get_result(y, outsize)
-        if intermediate:
-            return result, intermediate_output
-        return result
+        add_info = (intermediate_output, ) if intermediate else tuple()
+        return (result, timestamps.reshape(-1, 2), batch_idx) + add_info
