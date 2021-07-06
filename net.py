@@ -260,4 +260,4 @@ class Model(nn.Module):
         # shrink image to original size
         result = self._get_result(y, outsize)
         add_info = (intermediate_output, ) if intermediate else tuple()
-        return (result, timestamps.reshape(-1, 2), batch_idx) + add_info
+        return (result, timestamps.reshape(-1, 2), batch_idx[0::2]) + add_info
