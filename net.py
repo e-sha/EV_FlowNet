@@ -87,7 +87,7 @@ class UpsampleBlock(nn.Module):
 
 def compute_event_image(events,
                         timestamps,
-                        batch_idx,
+                        sample_idx,
                         imsize,
                         device='cpu',
                         dtype=torch.float32):
@@ -97,8 +97,8 @@ def compute_event_image(events,
                                     '/pytorch_scatter#installation to ' \
                                     'install torch_scatter'
     assert timestamps.ndim == 1
-    assert batch_idx.ndim == 1
-    assert (batch_idx[-1] + 1) * 2 == timestamps.numel()
+    assert sample_idx.ndim == 1
+    assert (sample_idx[-1] + 1) * 2 == timestamps.numel()
     start = timestamps[::2]
     stop = timestamps[1::2]
     bs = len(start)
@@ -199,7 +199,7 @@ class Model(nn.Module):
     def forward(self,
                 events,
                 timestamps,
-                batch_idx,
+                sample_idx,
                 imsize,
                 raw=True,
                 intermediate=False):
@@ -214,7 +214,7 @@ class Model(nn.Module):
             with torch.no_grad():
                 xb = compute_event_image(events,
                                          timestamps,
-                                         batch_idx,
+                                         sample_idx,
                                          extended_size,
                                          device=self.device,
                                          dtype=torch.float32)
@@ -260,4 +260,4 @@ class Model(nn.Module):
         # shrink image to original size
         result = self._get_result(y, outsize)
         add_info = (intermediate_output, ) if intermediate else tuple()
-        return (result, timestamps.reshape(-1, 2), batch_idx[0::2]) + add_info
+        return (result, timestamps.reshape(-1, 2), sample_idx[0::2]) + add_info

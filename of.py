@@ -60,8 +60,8 @@ class OpticalFlow:
                              tensor with depth 2.
         '''
         with torch.no_grad():
-            flow = self._net(*self._preprocess(events, start, stop),
-                             self.imsize)
+            flow, _, _ = self._net(*self._preprocess(events, start, stop),
+                                   self.imsize)
             return self._postprocess(flow, return_all)
 
     def _collate(self, events, start, stop):
@@ -75,9 +75,11 @@ class OpticalFlow:
                 np.full_like(e[0], i)))
             for i, e in enumerate(events)
             ])
-        timestamps = np.vstack(tuple([[b, i], [e, i]]
-            for i, (b, e) in enumerate(zip(start, stop))))
-        return events.T, timestamps
+        timestamps = np.hstack([[b, e] for b, e in zip(start, stop)])
+        sample_idx = np.hstack([[i, i] for i in range(len(start))])
+        return torch.FloatTensor(events.T, device=self._device), \
+               torch.FloatTensor(timestamps, device=self._device), \
+               torch.LongTensor(sample_idx, device=self._device)
 
     def _preprocess(self, events, start, stop):
         return self._collate(events, start, stop)
