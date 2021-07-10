@@ -141,7 +141,7 @@ def compute_event_image(events,
 
     # normalize timestamps and polarities
     t = (t - start[b]) / dt[b]
-    p = (1 - p) // 2  # (-1, 1) -> (1, 0)
+    p = torch.div((1 - p), 2, rounding_mode='floor')  # (-1, 1) -> (1, 0)
 
     idx = ((b * shape[1] + p) * shape[2] + y) * shape[3] + x
 
