@@ -120,7 +120,7 @@ def compute_event_image(events,
     y = events[:, 1].long()
     t = events[:, 2]
     p = events[:, 3].long()
-    s = events[:, 4].long()
+    # s = events[:, 4].long()
     b = events[:, 5].long()
 
     assert (torch.abs(p) == 1).all(), f'{torch.unique(p)}'
