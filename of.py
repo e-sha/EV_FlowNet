@@ -78,8 +78,8 @@ class OpticalFlow:
         timestamps = np.hstack([[b, e] for b, e in zip(start, stop)])
         sample_idx = np.hstack([[i, i] for i in range(len(start))])
         return torch.FloatTensor(events.T, device=self._device), \
-               torch.FloatTensor(timestamps, device=self._device), \
-               torch.LongTensor(sample_idx, device=self._device)
+            torch.FloatTensor(timestamps, device=self._device), \
+            torch.LongTensor(sample_idx, device=self._device)
 
     def _preprocess(self, events, start, stop):
         return self._collate(events, start, stop)
