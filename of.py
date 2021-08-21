@@ -75,9 +75,27 @@ class OpticalFlow:
                 np.full_like(e[0], i)))
             for i, e in enumerate(events)
             ])
+        events = {'x': torch.tensor(events[0],
+                                    dtype=torch.long,
+                                    device=self._device),
+                  'y': torch.tensor(events[1],
+                                    dtype=torch.long,
+                                    device=self._device),
+                  'timestamp': torch.tensor(events[2],
+                                            dtype=torch.float32,
+                                            device=self._device),
+                  'polarity': torch.tensor(events[3],
+                                           dtype=torch.long,
+                                           device=self._device),
+                  'element_index': torch.tensor(events[4],
+                                                dtype=torch.long,
+                                                device=self._device),
+                  'sample_index': torch.tensor(events[5],
+                                               dtype=torch.long,
+                                               device=self._device)}
         timestamps = np.hstack([[b, e] for b, e in zip(start, stop)])
         sample_idx = np.hstack([[i, i] for i in range(len(start))])
-        return torch.FloatTensor(events.T, device=self._device), \
+        return events, \
             torch.FloatTensor(timestamps, device=self._device), \
             torch.LongTensor(sample_idx, device=self._device)
 
