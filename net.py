@@ -102,8 +102,9 @@ def compute_event_image(events,
     start = timestamps[::2]
     stop = timestamps[1::2]
     bs = len(start)
-    if not isinstance(events, torch.Tensor):
-        events = torch.tensor(events, dtype=dtype, device=device)
+    if not isinstance(start, torch.Tensor):
+        for k in set.difference(set(events.keys()), {'size'}):
+            events[k] = torch.tensor(events[k], dtype=dtype, device=device)
         start = torch.tensor(start, dtype=dtype, device=device)
         stop = torch.tensor(stop, dtype=dtype, device=device)
 
@@ -111,17 +112,14 @@ def compute_event_image(events,
 
     shape = tuple([bs, 4] + list(imsize))
     res = torch.zeros(shape, dtype=dtype, device=device)
-    if events.numel() == 0:
+    if events['x'].numel() == 0:
         return res
 
-    assert events.shape[1] == 6, events.shape
-
-    x = events[:, 0].long()
-    y = events[:, 1].long()
-    t = events[:, 2]
-    p = events[:, 3].long()
-    # s = events[:, 4].long()
-    b = events[:, 5].long()
+    x = events['x']
+    y = events['y']
+    t = events['timestamp']
+    p = events['polarity']
+    b = events['sample_index']
 
     assert (torch.abs(p) == 1).all(), f'{torch.unique(p)}'
 
