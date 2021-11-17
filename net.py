@@ -194,6 +194,17 @@ class Model(nn.Module):
     def _extend_size(self, imsize):
         return tuple(map(lambda x: ((x - 1) // 16 + 1) * 16, imsize))
 
+    def quantize(self, events, timestamps, sample_idx, imsize):
+        extended_size = self._extend_size(imsize)
+        with torch.no_grad():
+            return compute_event_image(events,
+                                       timestamps,
+                                       sample_idx,
+                                       extended_size,
+                                       device=self.device,
+                                       dtype=torch.float32)
+
+
     def forward(self,
                 events,
                 timestamps,
@@ -208,14 +219,7 @@ class Model(nn.Module):
 
         # compute event_image
         if raw:
-            extended_size = self._extend_size(imsize)
-            with torch.no_grad():
-                xb = compute_event_image(events,
-                                         timestamps,
-                                         sample_idx,
-                                         extended_size,
-                                         device=self.device,
-                                         dtype=torch.float32)
+            xb = self.quantize(events, timestamps, sample_idx, imsize)
         else:
             xb = events
 
