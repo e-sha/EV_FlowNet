@@ -204,7 +204,6 @@ class Model(nn.Module):
                                        device=self.device,
                                        dtype=torch.float32)
 
-
     def forward(self,
                 events,
                 timestamps,
